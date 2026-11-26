@@ -57,6 +57,43 @@ export class EngineAudio {
     }
   }
 
+  // One-shot cue: a soft two-tone chirp for a ring threaded. Routed
+  // through the master gain, so mute still applies; no-op pre-start.
+  blip() {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(840, t);
+    osc.frequency.exponentialRampToValueAtTime(1420, t + 0.09);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    osc.connect(gain).connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.25);
+  }
+
+  // One-shot cue: a low, soft thud for rubber meeting runway.
+  thump() {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(74, t);
+    osc.frequency.exponentialRampToValueAtTime(36, t + 0.18);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.5, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    osc.connect(gain).connect(this.master);
+    osc.start(t);
+    osc.stop(t + 0.32);
+  }
+
   setMuted(muted) {
     this.muted = muted;
     if (this.master && this.ctx) {
@@ -76,4 +113,15 @@ export class EngineAudio {
     this.windGain.gain.setTargetAtTime(running ? Math.min(0.16, state.speed * 0.0022) : 0, t, 0.15);
     this.windFilter.frequency.setTargetAtTime(320 + state.speed * 9, t, 0.2);
   }
+}
+
+// Named-export cue helpers: fire one-shot sounds through an EngineAudio
+// instance without reaching into the class. Safe with null / unstarted
+// instances — the methods themselves no-op without a context.
+export function ringBlip(audio) {
+  if (audio) audio.blip();
+}
+
+export function touchdownThump(audio) {
+  if (audio) audio.thump();
 }

@@ -123,6 +123,52 @@ function buildScenery(seed) {
   return items;
 }
 
+// Boats working the bay: each sails a straight leg back and forth on the
+// open water south of the shore. render.js animates them from (x, y) along
+// heading; phase desynchronises the fleet so they are not in lockstep.
+function buildBoats(seed) {
+  const rng = mulberry32(seed * 31337 + 3);
+  const boats = [];
+  for (let i = 0; i < 8; i++) {
+    const x = range(rng, -2300, 2300);
+    const y = range(rng, -2500, -1500);
+    if (terrainHeight(x, y) > -3) continue; // seabed must be well under water
+    boats.push({
+      x, y,
+      heading: range(rng, 55, 125) + (rng() > 0.5 ? 180 : 0),
+      speed: range(rng, 2.4, 5.2),
+      len: range(rng, 24, 42),
+      leg: range(rng, 480, 780),
+      phase: range(rng, 0, 400),
+    });
+  }
+  return boats;
+}
+
+// A flock of gulls circling over the bay east of the strip. The flock
+// centre travels the circle (cx, cy, radius) at angSpeed; each bird holds
+// a small offset from the centre and flaps on its own phase.
+function buildBirds(seed) {
+  const rng = mulberry32(seed * 5551 + 9);
+  const birds = [];
+  const count = 7;
+  for (let i = 0; i < count; i++) {
+    birds.push({
+      offA: (i / count) * Math.PI * 2 + range(rng, -0.3, 0.3),
+      offR: range(rng, 6, 26),
+      offZ: range(rng, -6, 8),
+      flap: range(rng, 0, Math.PI * 2),
+    });
+  }
+  return {
+    cx: 900, cy: -1500, z: 150,
+    radius: 420,
+    angSpeed: 0.021,
+    phase: range(rng, 0, Math.PI * 2),
+    birds,
+  };
+}
+
 function buildClouds(seed) {
   const rng = mulberry32(seed * 104729 + 5);
   const clouds = [];
@@ -144,6 +190,8 @@ export function buildWorld(seed = 1) {
     runway: RUNWAY,
     scenery: buildScenery(seed),
     clouds: buildClouds(seed),
+    boats: buildBoats(seed),
+    birds: buildBirds(seed),
     heightAt: terrainHeight,
     groundHeight: surfaceHeight,
     isOverRunway,

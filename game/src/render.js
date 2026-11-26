@@ -173,7 +173,7 @@ function drawGroundBase(ctx, w, h, state, world, cam) {
   ctx.fillRect(0, top, w, h - top);
 }
 
-function cellColour(world, cx, cy, avgH, fogT) {
+function cellColour(world, cx, cy, avgH, fogT, time = 0, light = 1) {
   let base;
   const terrain = world.heightAt(cx, cy);
   if (terrain < 0.2) {
@@ -186,7 +186,19 @@ function cellColour(world, cx, cy, avgH, fogT) {
     const fog = rgb(COLORS.skyHorizon);
     const f = fogT * 0.8;
     const ch = (i) => Math.round((deep[i] + (shallow[i] - deep[i]) * t) * (1 - f) + fog[i] * f);
-    return `rgb(${ch(0)},${ch(1)},${ch(2)})`;
+    let r = ch(0);
+    let g = ch(1);
+    let b = ch(2);
+    // Sun glints: a sparse scatter of cells catches the light and twinkles
+    // as time passes — the hash re-rolls a few times a second per cell.
+    const tw = hash2(Math.round(cx / 95) * 7 + Math.floor(time * 2), Math.round(cy / 95) * 13);
+    if (tw > 0.9) {
+      const s = ((tw - 0.9) / 0.1) * (0.5 + 0.5 * Math.sin(time * 3 + tw * 44)) * 0.45;
+      r += (225 - r) * s;
+      g += (242 - g) * s;
+      b += (252 - b) * s;
+    }
+    return `rgb(${r | 0},${g | 0},${b | 0})`;
   }
   const riverDist = Math.abs(cx - world.riverCentreX(cy));
   if (riverDist < 46 && terrain < 7) base = COLORS.water;
@@ -198,10 +210,13 @@ function cellColour(world, cx, cy, avgH, fogT) {
     const wooded = noise2(cx * 0.0011, cy * 0.0011) > 0.32;
     base = wooded ? COLORS.forest : patch > 0.62 ? COLORS.fieldA : patch > 0.3 ? COLORS.fieldB : COLORS.meadow;
   }
-  return mixHex(base, COLORS.skyHorizon, fogT);
+  // Sun-direction shading: slopes facing the north-west sun sit lighter,
+  // slopes turned away sit darker. `light` comes from the cell's height
+  // gradient, computed in drawTerrain from heights it already sampled.
+  return mixHex(shade(base, light), COLORS.skyHorizon, fogT);
 }
 
-function drawTerrain(ctx, cam, w, h, focal, state, world) {
+function drawTerrain(ctx, cam, w, h, focal, state, world, time) {
   const CELL = 95;
   const RADIUS = 15;
   const originX = Math.round(state.x / CELL) * CELL;
@@ -223,16 +238,27 @@ function drawTerrain(ctx, cam, w, h, focal, state, world) {
 
   for (const cell of cells) {
     const { x0, y0 } = cell;
+    // Corner heights, SW/SE/NE/NW — sampled once and reused for both the
+    // projection and the sun-shading gradient below.
+    const rawZ = [
+      world.heightAt(x0, y0),
+      world.heightAt(x0 + CELL, y0),
+      world.heightAt(x0 + CELL, y0 + CELL),
+      world.heightAt(x0, y0 + CELL),
+    ];
     const corners = [
       [x0, y0], [x0 + CELL, y0], [x0 + CELL, y0 + CELL], [x0, y0 + CELL],
-    ].map(([px, py]) => {
-      const z = Math.max(world.heightAt(px, py), WORLD.seaLevel);
-      return project(cam, w, h, focal, px, py, z);
-    });
+    ].map(([px, py], i) => project(cam, w, h, focal, px, py, Math.max(rawZ[i], WORLD.seaLevel)));
     if (corners.some((c) => c === null)) continue;
     const avgH = world.heightAt(x0 + CELL / 2, y0 + CELL / 2);
     const fogT = Math.min(0.82, cell.dist / 2100);
-    ctx.fillStyle = cellColour(world, x0 + CELL / 2, y0 + CELL / 2, avgH, fogT);
+    // Sun in the north-west: light = 0.95 on the flat, brighter where the
+    // ground climbs toward the east or falls toward the north (faces the
+    // sun), darker on slopes turned away from it.
+    const dhdx = ((rawZ[1] + rawZ[2]) - (rawZ[0] + rawZ[3])) / (2 * CELL);
+    const dhdy = ((rawZ[2] + rawZ[3]) - (rawZ[0] + rawZ[1])) / (2 * CELL);
+    const light = Math.max(0.55, Math.min(1.3, 0.95 + (0.62 * dhdx - 0.62 * dhdy) * 0.14));
+    ctx.fillStyle = cellColour(world, x0 + CELL / 2, y0 + CELL / 2, avgH, fogT, time, light);
     poly(ctx, corners);
     ctx.fill();
   }
@@ -282,6 +308,90 @@ function drawRunway(ctx, cam, w, h, focal, world) {
         ctx.fill();
       }
     }
+  }
+}
+
+// --- boats and birds ----------------------------------------------------------------------
+// Boats sail their leg back and forth; the wake is two fading segments
+// astern. Birds ride the flock circle from world.js, wings flapping.
+function drawBoats(ctx, cam, w, h, focal, state, world, time) {
+  if (!world.boats) return;
+  ctx.lineCap = 'round';
+  for (const boat of world.boats) {
+    const period = boat.leg * 2;
+    const s = ((time + boat.phase) * boat.speed) % period;
+    const along = (s < boat.leg ? s : period - s) - boat.leg / 2;
+    const baseRad = boat.heading * DEG;
+    const bx = boat.x + Math.sin(baseRad) * along;
+    const by = boat.y + Math.cos(baseRad) * along;
+    if (Math.hypot(bx - state.x, by - state.y) > 2300) continue;
+    const facing = (s < boat.leg ? boat.heading : boat.heading + 180) * DEG;
+    const dx = Math.sin(facing);
+    const dy = Math.cos(facing);
+    const half = boat.len / 2;
+    const bow = project(cam, w, h, focal, bx + dx * half, by + dy * half, 0.7);
+    const stern = project(cam, w, h, focal, bx - dx * half, by - dy * half, 0.7);
+    if (!bow || !stern) continue;
+    const unit = focal / bow.depth;
+
+    // Wake: bright just astern, dissolving further back.
+    const wakeLen = boat.len * (1.4 + boat.speed * 0.35);
+    const wakeMid = project(cam, w, h, focal, bx - dx * (half + wakeLen * 0.45), by - dy * (half + wakeLen * 0.45), 0.4);
+    const wakeEnd = project(cam, w, h, focal, bx - dx * (half + wakeLen), by - dy * (half + wakeLen), 0.4);
+    if (wakeMid && wakeEnd) {
+      ctx.strokeStyle = 'rgba(240,250,255,0.38)';
+      ctx.lineWidth = Math.max(1, boat.len * 0.17 * unit);
+      ctx.beginPath();
+      ctx.moveTo(stern.x, stern.y);
+      ctx.lineTo(wakeMid.x, wakeMid.y);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(240,250,255,0.14)';
+      ctx.lineWidth = Math.max(0.7, boat.len * 0.09 * unit);
+      ctx.beginPath();
+      ctx.moveTo(wakeMid.x, wakeMid.y);
+      ctx.lineTo(wakeEnd.x, wakeEnd.y);
+      ctx.stroke();
+    }
+
+    // Hull, then a pale wheelhouse block aft of amidships.
+    ctx.strokeStyle = '#3a3f45';
+    ctx.lineWidth = Math.max(1.6, boat.len * 0.30 * unit);
+    ctx.beginPath();
+    ctx.moveTo(stern.x, stern.y);
+    ctx.lineTo(bow.x, bow.y);
+    ctx.stroke();
+    const cab = project(cam, w, h, focal, bx - dx * half * 0.25, by - dy * half * 0.25, 2.4);
+    if (cab) {
+      const cs = Math.max(1.4, boat.len * 0.16 * unit);
+      ctx.fillStyle = '#e8e4da';
+      ctx.fillRect(cab.x - cs / 2, cab.y - cs / 2, cs, cs * 0.8);
+    }
+  }
+  ctx.lineCap = 'butt';
+}
+
+function drawBirds(ctx, cam, w, h, focal, world, time) {
+  const flock = world.birds;
+  if (!flock) return;
+  const ang = flock.phase + time * flock.angSpeed;
+  const cx = flock.cx + Math.cos(ang) * flock.radius;
+  const cy = flock.cy + Math.sin(ang) * flock.radius;
+  ctx.strokeStyle = 'rgba(28,38,48,0.85)';
+  ctx.lineWidth = 1.5;
+  for (const bird of flock.birds) {
+    const bx = cx + Math.cos(bird.offA) * bird.offR;
+    const by = cy + Math.sin(bird.offA) * bird.offR;
+    const bz = flock.z + bird.offZ + Math.sin(time * 1.7 + bird.flap) * 2.5;
+    const p = project(cam, w, h, focal, bx, by, bz);
+    if (!p) continue;
+    const span = (3.4 * focal) / p.depth; // ~3.4 m wingspan, in px
+    if (span < 2.5 || span > 90) continue;
+    const flap = Math.sin(time * 9 + bird.flap) * span * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(p.x - span, p.y - flap);
+    ctx.lineTo(p.x, p.y + span * 0.16);
+    ctx.lineTo(p.x + span, p.y - flap);
+    ctx.stroke();
   }
 }
 
@@ -401,6 +511,68 @@ function drawScenery(ctx, cam, w, h, focal, state, world) {
   }
 }
 
+// --- distant traffic, speed streaks, vignette ----------------------------------------------
+// Another aeroplane on a wide, lazy circuit over the bay — a dark
+// silhouette sized by its projected scale, oriented by its projected track.
+function drawTraffic(ctx, cam, w, h, focal, time) {
+  const ang = time * 0.045 + 1.1;
+  const tx = 1750 + Math.cos(ang) * 620;
+  const ty = -1750 + Math.sin(ang) * 620;
+  const p = project(cam, w, h, focal, tx, ty, 305);
+  const q = project(cam, w, h, focal, tx - Math.sin(ang) * 40, ty + Math.cos(ang) * 40, 305);
+  if (!p || !q) return;
+  const len = 26 * (focal / p.depth); // a 26 m aeroplane, in px
+  if (len < 5 || len > 130) return;
+  const theta = Math.atan2(q.y - p.y, q.x - p.x);
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(theta);
+  ctx.fillStyle = 'rgba(42,56,70,0.8)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, len / 2, len * 0.10, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(-len * 0.08, -len * 0.34, len * 0.16, len * 0.68); // wing
+  ctx.fillRect(-len * 0.52, -len * 0.18, len * 0.12, len * 0.36); // tail
+  ctx.restore();
+}
+
+// Air rushing past: short radial streaks near the frame edges once the
+// speed builds. Positions are hashed per time-slice so they stream outward.
+function drawSpeedStreaks(ctx, w, h, state, time) {
+  if (state.speed <= 52 || state.status !== 'flying') return;
+  const intensity = Math.min(1, (state.speed - 52) / 28);
+  const maxR = Math.hypot(w, h) / 2;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 14; i++) {
+    const ang = hash2(i, 31) * Math.PI * 2;
+    const phase = (time * 1.5 + hash2(i, 5)) % 1;
+    const r = (0.30 + phase * 0.52) * maxR;
+    const x = w / 2 + Math.cos(ang) * r;
+    const y = h * 0.55 + Math.sin(ang) * r * 0.82;
+    const len = (24 + phase * 48) * (0.5 + intensity * 0.7);
+    ctx.strokeStyle = `rgba(255,255,255,${(0.05 + 0.15 * intensity * (1 - phase)).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len * 0.82);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+}
+
+// A soft darkening at the corners — cheap depth, drawn last in the scene
+// (the HUD paints over it, so instruments stay crisp).
+function drawVignette(ctx, w, h) {
+  const grad = ctx.createRadialGradient(
+    w / 2, h * 0.52, Math.min(w, h) * 0.42,
+    w / 2, h * 0.52, Math.hypot(w, h) / 2,
+  );
+  grad.addColorStop(0, 'rgba(5,10,16,0)');
+  grad.addColorStop(1, 'rgba(5,10,16,0.30)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+}
+
 // --- the plane (chase view, drawn at screen centre) --------------------------------------
 function drawPlane(ctx, w, h, state, time) {
   const cx = w / 2;
@@ -495,9 +667,14 @@ export function drawScene(ctx, w, h, state, world, view = {}) {
   drawSky(ctx, w, h, state);
   drawGroundBase(ctx, w, h, state, world, cam);
   drawClouds(ctx, cam, w, h, focal, world, time);
-  drawTerrain(ctx, cam, w, h, focal, state, world);
+  drawTerrain(ctx, cam, w, h, focal, state, world, time);
   drawRunway(ctx, cam, w, h, focal, world);
   drawScenery(ctx, cam, w, h, focal, state, world);
+  drawBoats(ctx, cam, w, h, focal, state, world, time);
+  drawBirds(ctx, cam, w, h, focal, world, time);
   drawRings(ctx, cam, w, h, focal, state, world, time);
+  drawTraffic(ctx, cam, w, h, focal, time);
   drawPlane(ctx, w, h, state, time);
+  drawSpeedStreaks(ctx, w, h, state, time);
+  drawVignette(ctx, w, h);
 }

@@ -9,7 +9,7 @@ import { buildWorld } from './world.js';
 import { createPlane, stepPlane } from './physics.js';
 import { drawScene } from './render.js';
 import { drawHud, drawTitle, drawEnd } from './hud.js';
-import { EngineAudio } from './audio.js';
+import { EngineAudio, ringBlip, touchdownThump } from './audio.js';
 import { setupShot } from './shots.js';
 
 const canvas = document.getElementById('game');
@@ -63,6 +63,8 @@ function runGame() {
   let accumulator = 0;
   const STEP = 1 / 120;
   let prev = { pause: false, mute: false, restart: false };
+  let rungRings = 0;         // ringsPassed as of the last ring blip
+  let prevStatus = 'flying'; // last frame's status, for the touchdown thump
 
   function reset() {
     state = createPlane();
@@ -70,6 +72,8 @@ function runGame() {
     mode = 'title';
     paused = false;
     endTimer = 0;
+    rungRings = 0;
+    prevStatus = 'flying';
   }
 
   // Shortest-path angular lerp, in degrees.
@@ -123,6 +127,13 @@ function runGame() {
         endTimer += dt;
         if (endTimer > 0.9) mode = 'ended';
       }
+      // One-shot audio cues, edge-triggered off the physics state.
+      if (state.ringsPassed > rungRings) {
+        rungRings = state.ringsPassed;
+        ringBlip(audio);
+      }
+      if (state.status !== 'flying' && prevStatus === 'flying') touchdownThump(audio);
+      prevStatus = state.status;
       audio.update(state);
     }
 

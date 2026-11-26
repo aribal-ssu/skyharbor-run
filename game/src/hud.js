@@ -39,6 +39,61 @@ function missionMessage(state, totalRings) {
   return 'All rings done — return to the runway and land gently';
 }
 
+// Compass ribbon across the top centre: a sliding tape of ticks and
+// cardinal letters, with an accent caret marking the current heading.
+function drawCompass(ctx, w, state) {
+  const cw = 360;
+  const cx = w / 2;
+  const x0 = cx - cw / 2;
+  const y0 = 14;
+  const hh = 34;
+  panel(ctx, x0, y0, cw, hh);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x0 + 4, y0, cw - 8, hh);
+  ctx.clip();
+  const pxPerDeg = 3.4;
+  const reach = cw / 2 / pxPerDeg + 6;
+  for (let hv = 0; hv < 360; hv += 5) {
+    const d = ((hv - state.heading + 540) % 360) - 180;
+    if (Math.abs(d) > reach) continue;
+    const x = cx + d * pxPerDeg;
+    if (hv % 45 === 0) {
+      const letter = COMPASS[Math.round(hv / 45) % 8];
+      label(ctx, x, y0 + 17, letter, 13, hv === 0 ? COLORS.hudAccent : COLORS.hudText, 'center');
+      ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + 22);
+      ctx.lineTo(x, y0 + hh - 3);
+      ctx.stroke();
+    } else if (hv % 15 === 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + 24);
+      ctx.lineTo(x, y0 + hh - 3);
+      ctx.stroke();
+      if (hv % 30 === 0) {
+        label(ctx, x, y0 + 17, String(hv / 10).padStart(2, '0'), 10, COLORS.hudText, 'center');
+      }
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.beginPath();
+      ctx.moveTo(x, y0 + 28);
+      ctx.lineTo(x, y0 + hh - 3);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  // Centre caret: the heading you are actually on.
+  ctx.fillStyle = COLORS.hudAccent;
+  ctx.beginPath();
+  ctx.moveTo(cx - 5, y0 + hh);
+  ctx.lineTo(cx + 5, y0 + hh);
+  ctx.lineTo(cx, y0 + hh - 7);
+  ctx.closePath();
+  ctx.fill();
+}
+
 export function drawHud(ctx, w, h, state, mission) {
   const totalRings = mission.totalRings;
   const compass = COMPASS[Math.round(state.heading / 45) % 8];
@@ -70,6 +125,8 @@ export function drawHud(ctx, w, h, state, mission) {
   label(ctx, w - 170, 76, `SCORE  ${state.score}`, 19);
   label(ctx, w - 170, 108, `TIME  ${minutes}:${String(seconds).padStart(2, '0')}`, 19);
 
+  drawCompass(ctx, w, state);
+
   // Bottom-left: throttle and fuel bars.
   panel(ctx, 16, h - 86, 208, 70);
   label(ctx, 30, h - 58, 'THR', 12);
@@ -79,6 +136,7 @@ export function drawHud(ctx, w, h, state, mission) {
   bar(ctx, 74, h - 40, 136, 10, fuelFrac, fuelFrac < 0.22 ? COLORS.hudBad : COLORS.hudGood);
 
   drawHorizon(ctx, w - 74, h - 66, 46, state);
+  drawWind(ctx, w - 168, h - 66, state);
 
   // Warnings.
   if (state.stalled) {
@@ -92,6 +150,47 @@ export function drawHud(ctx, w, h, state, mission) {
 
   // Mission message along the bottom.
   label(ctx, w / 2, h - 22, missionMessage(state, totalRings), 17, COLORS.hudText, 'center');
+}
+
+// Wind readout: a small dial whose arrow shows where the wind comes FROM
+// relative to the nose (up = ahead), with the strength in knots beneath.
+function drawWind(ctx, cx, cy, state) {
+  if (state.windDir === undefined || state.windSpeed === undefined) return;
+  ctx.fillStyle = COLORS.hudPanel;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 17, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 17, 0, Math.PI * 2);
+  ctx.stroke();
+
+  const rel = ((((state.windDir - state.heading) % 360) + 540) % 360) - 180;
+  const rad = rel * Math.PI / 180;
+  const ax = Math.sin(rad);
+  const ay = -Math.cos(rad);
+  ctx.strokeStyle = COLORS.hudAccent;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx + ax * 12, cy + ay * 12);
+  ctx.lineTo(cx - ax * 5, cy - ay * 5);
+  ctx.stroke();
+  // Arrowhead at the inner end, barbs swept back along the shaft.
+  const hx = cx - ax * 5;
+  const hy = cy - ay * 5;
+  const dx = -ax;
+  const dy = -ay;
+  const c = -0.866;
+  ctx.beginPath();
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(hx + (dx * c - dy * 0.5) * 6.5, hy + (dx * 0.5 + dy * c) * 6.5);
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(hx + (dx * c + dy * 0.5) * 6.5, hy + (-dx * 0.5 + dy * c) * 6.5);
+  ctx.stroke();
+
+  label(ctx, cx, cy - 24, 'WIND', 10, COLORS.hudText, 'center');
+  label(ctx, cx, cy + 32, `${toKnots(state.windSpeed)} KT`, 11, COLORS.hudText, 'center');
 }
 
 // Artificial horizon: a small ball that rolls and pitches with the plane.

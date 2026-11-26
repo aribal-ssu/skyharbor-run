@@ -1,5 +1,5 @@
 // Skyharbor Run — screenshot scenes.
-// When the page URL carries ?shot=start|play|end&seed=N, main.js renders a
+// When the page URL carries ?shot=start|play|approach|end&seed=N, main.js renders a
 // single frozen frame from the state built here instead of running the
 // game, so the dossier screenshots are real renders of this exact code,
 // reproducible from the seed alone.
@@ -56,6 +56,31 @@ function playState(world) {
   return { state, mode: 'play' };
 }
 
+function approachState() {
+  // On final for the strip: all rings threaded, lined up on the centreline
+  // extension a few hundred metres short of the threshold, low and slow
+  // with the power at 35% — the HUD tells the landing story.
+  const state = createPlane();
+  const rad = RUNWAY.heading * Math.PI / 180;
+  const along = -RUNWAY.length / 2 - 520; // 520 m short of the threshold
+  state.x = RUNWAY.x + Math.sin(rad) * along;
+  state.y = RUNWAY.y + Math.cos(rad) * along;
+  state.z = RUNWAY.elevation + 27;
+  state.heading = RUNWAY.heading;
+  state.pitch = -3;
+  state.roll = 0;
+  state.speed = 34;
+  state.vspeed = -2.2;
+  state.throttle = 0.35;
+  state.fuel = 41;
+  state.onGround = false;
+  state.ringIndex = MISSION.ringCount;
+  state.ringsPassed = MISSION.ringCount;
+  state.score = MISSION.ringCount * MISSION.ringScore;
+  state.time = 168;
+  return { state, mode: 'play' };
+}
+
 function endState() {
   // Rolled to a stop on the strip with a full card of rings.
   const state = createPlane();
@@ -83,6 +108,10 @@ export function setupShot(searchParams) {
   const world = buildWorld(seed);
   if (name === 'play') {
     const { state, mode } = playState(world);
+    return { state, world, mode };
+  }
+  if (name === 'approach') {
+    const { state, mode } = approachState();
     return { state, world, mode };
   }
   if (name === 'end') {
